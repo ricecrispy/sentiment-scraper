@@ -1,15 +1,19 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+import json
+import pathlib
 import feedparser
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-# 1. Multi-Tier Feed Portfolio (Mainstream + Developer Communities + Research)
+# 1. Expanded Multi-Tier Feed Portfolio (Mainstream + Global Open Source / Developer Research)
 FEEDS: dict[str, str] = {
     "TechCrunch": "https://techcrunch.com/feed/",
     "The Verge": "https://www.theverge.com/rss/index.xml",
     "Ars Technica": "https://feeds.arstechnica.com/arstechnica/index",
     "Hacker News": "https://news.ycombinator.com/rss",
+    "Hugging Face Blog": "https://huggingface.co/blog/feed.xml",
     "r/LocalLLaMA": "https://www.reddit.com/r/LocalLLaMA/.rss",
     "r/MachineLearning": "https://www.reddit.com/r/MachineLearning/.rss",
     "r/ArtificialIntelligence": "https://www.reddit.com/r/ArtificialIntelligence/.rss",
@@ -19,17 +23,17 @@ META_BLOCKLIST: tuple[str, ...] = (
     "megathread", "project showcase", "weekly", "bi-weekly", "ama", "poll"
 )
 
-# 2. Expanded Single Source of Truth for Global AI Ecosystems
+# 2. Resilient Brand-Root & Prefix Mapping (Future-proof against new model versions)
 ENTITY_MAPPING: dict[str, tuple[str, ...]] = {
-    "OpenAI": ("openai", "chatgpt", "gpt-4", "gpt-5"),
+    "OpenAI": ("openai", "chatgpt", "gpt-"),
     "Google / DeepMind": ("google ai", "gemini", "deepmind"),
     "Anthropic": ("anthropic", "claude"),
-    "Meta / Llama Ecosystem": ("llama 3", "llama 2", "huggingface"),
+    "Meta / Llama Ecosystem": ("meta ai", "llama", "huggingface"),
     "xAI / Grok": ("xai", "grok"),
     "DeepSeek": ("deepseek",),
     "Alibaba / Qwen": ("alibaba", "qwen"),
-    "Zhipu / GLM": ("zhipu", "glm-4", "glm-5"),
-    "Moonshot / Kimi": ("moonshot", "kimi ai"),
+    "Zhipu / GLM": ("zhipu", "glm-"),
+    "Moonshot / Kimi": ("moonshot", "kimi"),
 }
 
 # 3. Automatically derive TARGET_KEYWORDS from the mapping (Zero duplication)
@@ -39,14 +43,16 @@ TARGET_KEYWORDS: tuple[str, ...] = tuple(
 
 @dataclass(frozen=True)
 class SentimentRecord:
-    source: str
+    timestamp: str
     entity: str
+    source: str
     title: str
+    url: str
     score: float
     sentiment: str
 
 def identify_entity(text: str) -> str:
-    """Map text to a specific primary tech giant/ecosystem using the centralized mapping."""
+    """Map text to a specific primary tech giant/ecosystem using brand roots."""
     text_lower = text.lower()
     for entity, keywords in ENTITY_MAPPING.items():
         if any(kw in text_lower for kw in keywords):
@@ -68,6 +74,9 @@ def fetch_single_feed(source_name: str, url: str) -> tuple[str, list]:
 def fetch_and_analyze() -> list[SentimentRecord]:
     analyzer = SentimentIntensityAnalyzer()
     collected_data: list[SentimentRecord] = []
+    
+    # Generate a unified UTC timestamp for this run batch
+    run_timestamp = datetime.now(timezone.utc).isoformat()
 
     print("Fetching and analyzing global multi-source AI sentiment concurrently...\n")
 
@@ -83,15 +92,19 @@ def fetch_and_analyze() -> list[SentimentRecord]:
             for entry in entries[:20]:
                 title = entry.get("title", "")
                 summary = entry.get("summary", entry.get("description", ""))
+                link = entry.get("link", "")
                 combined_text = f"{title} {summary}"
                 text_lower = combined_text.lower()
 
+                # Heuristic Filter A: Skip very short entries
                 if len(combined_text.strip()) < 40:
                     continue
 
+                # Heuristic Filter B: Exclude forum meta-noise
                 if any(block in text_lower for block in META_BLOCKLIST):
                     continue
 
+                # Strict Keyword Filter (derived from ENTITY_MAPPING)
                 if any(kw in text_lower for kw in TARGET_KEYWORDS):
                     vs = analyzer.polarity_scores(combined_text)
                     compound_score = vs["compound"]
@@ -107,15 +120,46 @@ def fetch_and_analyze() -> list[SentimentRecord]:
 
                     collected_data.append(
                         SentimentRecord(
-                            source=source_name,
+                            timestamp=run_timestamp,
                             entity=entity,
+                            source=source_name,
                             title=title,
+                            url=link,
                             score=compound_score,
                             sentiment=sentiment
                         )
                     )
 
     return collected_data
+
+def export_to_json(results: list[SentimentRecord], filename: str = "sentiment_history.json") -> None:
+    """Exports records to a JSON file, appending or writing a structured payload."""
+    output_path = pathlib.Path(filename)
+    
+    payload = {
+        "run_timestamp": datetime.now(timezone.utc).isoformat(),
+        "total_mentions": len(results),
+        "records": [asdict(r) for r in results]
+    }
+
+    existing_history = []
+    if output_path.exists():
+        try:
+            with open(output_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    existing_history = data
+                elif isinstance(data, dict):
+                    existing_history = [data]
+        except json.JSONDecodeError:
+            pass
+
+    existing_history.append(payload)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(existing_history, f, indent=2, ensure_ascii=False)
+    
+    print(f"[Info] Exported {len(results)} records to {output_path.absolute()}")
 
 def generate_summary_report(results: list[SentimentRecord]) -> None:
     if not results:
@@ -144,8 +188,10 @@ def generate_summary_report(results: list[SentimentRecord]) -> None:
     print("-" * 65)
     for item in results:
         print(f"[{item.sentiment} ({item.score:+.4f})] ({item.entity}) {item.source}")
-        print(f"-> {item.title}\n")
+        print(f"-> {item.title}")
+        print(f"   Link: {item.url}\n")
 
 if __name__ == "__main__":
     records = fetch_and_analyze()
     generate_summary_report(records)
+    export_to_json(records)
