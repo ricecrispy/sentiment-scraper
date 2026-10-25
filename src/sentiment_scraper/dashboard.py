@@ -11,7 +11,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS styling
+# Custom CSS styling (Dark-mode optimized)
 st.markdown(
     """
     <style>
@@ -38,7 +38,14 @@ def load_sentiment_data() -> pd.DataFrame:
 
   try:
     supabase: Client = create_client(url, key)
-    response = supabase.table("sentiment_logs").select("*").execute()
+    # Fetch the most recent 100 records to keep performance snappy and UI clean
+    response = (
+        supabase.table("sentiment_logs")
+        .select("*")
+        .order("timestamp", desc=True)
+        .limit(100)
+        .execute()
+    )
 
     if not response.data:
       return pd.DataFrame()
