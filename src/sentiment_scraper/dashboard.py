@@ -26,7 +26,7 @@ st.markdown(
 
 @st.cache_data(ttl=60)
 def load_sentiment_data() -> pd.DataFrame:
-  """Fetch sentiment log records directly from Supabase via the API client."""
+  """Fetch full sentiment log history from Supabase for global metrics and charts."""
   url = st.secrets.get("SUPABASE_URL")
   key = st.secrets.get("SUPABASE_KEY")
 
@@ -38,12 +38,11 @@ def load_sentiment_data() -> pd.DataFrame:
 
   try:
     supabase: Client = create_client(url, key)
-    # Fetch the most recent 100 records to keep performance snappy and UI clean
+    # Fetch full history so charts and metrics reflect complete multi-day trends
     response = (
         supabase.table("sentiment_logs")
         .select("*")
         .order("timestamp", desc=True)
-        .limit(100)
         .execute()
     )
 
@@ -118,7 +117,7 @@ def main():
     st.info("No matching articles found for the selected filters.")
     return
 
-  # 1. Metric Cards
+  # 1. Metric Cards (Evaluates all filtered historical data)
   total_articles = len(filtered_df)
   avg_compound = filtered_df["score"].mean()
   positive_pct = (filtered_df["sentiment"] == "Positive").mean() * 100
@@ -132,7 +131,7 @@ def main():
 
   st.markdown("---")
 
-  # 2. Charts Layout
+  # 2. Charts Layout (Evaluates all filtered historical data)
   col1, col2 = st.columns(2)
 
   with col1:
@@ -177,7 +176,7 @@ def main():
     fig_pie.update_layout(height=350)
     st.plotly_chart(fig_pie, use_container_width=True)
 
-  # 3. Article Log Table
+  # 3. Article Log Table (Capped at 100 rows for clean UI performance)
   st.subheader("📰 Recent Articles & Sentiment Logs")
 
   display_columns = [
@@ -192,7 +191,7 @@ def main():
   existing_cols = [c for c in display_columns if c in filtered_df.columns]
 
   st.dataframe(
-      filtered_df[existing_cols],
+      filtered_df[existing_cols].head(100),
       column_config={
           "url": st.column_config.LinkColumn("Article Link"),
           "score": st.column_config.NumberColumn(
